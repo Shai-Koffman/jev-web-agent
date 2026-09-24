@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Covered button</title>
+<style>
+  #cover { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); z-index: 10; }
+</style></head>
+<body>
+  <h1>Something is in the way</h1>
+  <button type="button" onclick="document.title = 'CLICKED'">Covered button</button>
+  <input aria-label="Covered input">
+  <div id="cover"></div>
+</body>
+</html>

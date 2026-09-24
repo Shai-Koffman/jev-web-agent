@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from jev_web_agent.models import Action
 
@@ -41,14 +42,23 @@ def act(page: Page, action: Action) -> ActResult:
         # is_visible() is False both when the element was removed and when it was hidden.
         if not locator.is_visible():
             return ActResult(False, f"{action.target_id} is gone; re-observing", gone=True)
-        if action.operation == "click":
-            locator.click(timeout=ACTION_TIMEOUT_MS)
-            note = f"clicked {action.target_id}"
-        else:
-            if action.text is None:
-                return ActResult(False, "type needs text")
-            locator.fill(action.text, timeout=ACTION_TIMEOUT_MS)
-            note = f'typed "{action.text}" into {action.target_id}'
+        if action.operation == "type" and action.text is None:
+            return ActResult(False, "type needs text")
+        try:
+            if action.operation == "click":
+                locator.click(timeout=ACTION_TIMEOUT_MS)
+                note = f"clicked {action.target_id}"
+            else:
+                assert action.text is not None
+                locator.fill(action.text, timeout=ACTION_TIMEOUT_MS)
+                note = f'typed "{action.text}" into {action.target_id}'
+        except PlaywrightTimeoutError:
+            # e.g. an overlay covers the target: not fatal, the next observation shows why
+            return ActResult(
+                False,
+                f"{action.operation} on {action.target_id} timed out after "
+                f"{ACTION_TIMEOUT_MS} ms; re-observing",
+            )
     elif action.operation == "press_enter":
         # Enter usually submits a form; give a navigation a moment to start before settling.
         # No navigation (e.g. an in-page search) is fine too.

@@ -1,5 +1,7 @@
+import pytest
 from playwright.sync_api import Page
 
+import jev_web_agent.act as act_module
 from jev_web_agent.act import act
 from jev_web_agent.models import Action
 from jev_web_agent.observe import observe
@@ -79,3 +81,16 @@ def test_element_still_there_is_clicked(page: Page, site: str) -> None:
 
     assert result.executed
     assert page.title() == "CLICKED"
+
+
+def test_click_blocked_by_an_overlay_times_out_without_raising(
+    page: Page, site: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(act_module, "ACTION_TIMEOUT_MS", 500)
+    page.goto(f"{site}/overlay.html")
+
+    result = act(page, Action("click", target_id=_id_of(page, "Covered button")))
+
+    assert not result.executed
+    assert "timed out" in result.note
+    assert page.title() == "Covered button"

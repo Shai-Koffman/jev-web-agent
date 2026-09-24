@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
+import jev_web_agent.act as act_module
 from jev_web_agent.agent import Thresholds, gate, step_line
 from jev_web_agent.cli import run
 from jev_web_agent.decide import ChoiceResult, Decision
@@ -31,7 +32,7 @@ def _run(
 
 
 def _executed(record: RunRecord) -> list[str]:
-    return [s.action for s in record.steps if s.action and "gone" not in s.result]
+    return [s.action for s in record.steps if s.action and not s.result.endswith("re-observing")]
 
 
 def test_search_open_article_done(tmp_path: Path, site: str) -> None:
@@ -247,3 +248,17 @@ def test_invalid_operation_aborts_cleanly_with_a_reason(tmp_path: Path, site: st
     assert "unknown operation 'fly'" in record.reason
     assert _executed(record) == []
     assert "ABORT" in out
+
+
+def test_a_click_that_times_out_reobserves_instead_of_erroring(
+    tmp_path: Path, site: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(act_module, "ACTION_TIMEOUT_MS", 500)
+    jev = ScriptedJev([Thought("click", target="Covered button"), Thought("done", goal_done=0.9)])
+
+    record, _, _ = _run(tmp_path, f"{site}/overlay.html", "press the button", jev)
+
+    assert "timed out" in record.steps[0].result
+    assert _executed(record) == []
+    assert len(record.steps) == 2  # re-observed
+    assert record.status == "done"
