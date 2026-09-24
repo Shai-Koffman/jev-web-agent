@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -70,6 +70,7 @@ class Thought:
     goal_done: float = 0.02
     risky: float = 0.01
     prob: float = 0.9
+    target_prob: float | None = None  # overrides `prob` for the target question
     target_id: str | None = None
     raw_operation: str | None = None
 
@@ -80,11 +81,18 @@ class ScriptedJev:
 
     thoughts: Sequence[Thought]
     think_seconds: float = 0.0  # simulated model latency (the page may change meanwhile)
+    # Answers risk re-check calls (a lone `risky` question about a specific next step): given
+    # the state, return the risky noul. These calls do not consume a Thought.
+    risk_of: Callable[[str], float] = field(default=lambda state: 0.01)
+    risk_calls: list[str] = field(default_factory=lambda: list[str]())
     calls: list[tuple[str, Mapping[str, Question]]] = field(
         default_factory=lambda: list[tuple[str, Mapping[str, Question]]]()
     )
 
     def ask(self, state: str, questions: Mapping[str, Question]) -> JevAnswers:
+        if set(questions) == {"risky"}:
+            self.risk_calls.append(state)
+            return JevAnswers(choices={}, nouls={"risky": self.risk_of(state)})
         thought = self.thoughts[min(len(self.calls), len(self.thoughts) - 1)]
         if self.think_seconds:
             time.sleep(self.think_seconds)
@@ -94,8 +102,9 @@ class ScriptedJev:
         for name, question in questions.items():
             if isinstance(question, Choice):
                 options = list(criteria_of(question))
+                prob = thought.target_prob if name == "target" and thought.target_prob else None
                 choices[name] = choice_result(
-                    options, self._pick(name, question, thought), thought.prob
+                    options, self._pick(name, question, thought), prob or thought.prob
                 )
             elif isinstance(question, Noul):
                 nouls[name] = {"goal_done": thought.goal_done, "risky": thought.risky}.get(

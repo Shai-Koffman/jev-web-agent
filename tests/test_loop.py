@@ -1,6 +1,7 @@
 """The whole loop, wired exactly as the CLI wires it, with a scripted fake Jev injected."""
 
 import io
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,7 @@ def test_low_confidence_asks_the_human_who_picks(tmp_path: Path, site: str) -> N
     record, _, _ = _run(tmp_path, f"{site}/results.html", "open the article", jev, human=human)
 
     assert human.asked == ["operation", "target"]
+    assert len(jev.risk_calls) == 1  # the pick differs from Jev's proposal: re-checked
     assert record.status == "done"
     assert record.steps[1].url == f"{site}/article.html"
     assert record.steps[0].human == 'picked click [e2: link "Alan Turing"]'
@@ -285,4 +287,44 @@ def test_agent_observes_the_new_tab_a_click_opened(tmp_path: Path, site: str) ->
 
     assert record.steps[1].url == f"{site}/article.html"
     assert record.steps[1].title == "Alan Turing - Encyclopedia"
+    assert record.status == "done"
+
+
+def _risky_if_next_step_mentions(word: str) -> Callable[[str], float]:
+    def risk(state: str) -> float:
+        _, _, next_step = state.partition("NEXT STEP")
+        return 0.85 if word in next_step else 0.01
+
+    return risk
+
+
+def test_a_human_pick_is_risk_checked_before_it_runs(tmp_path: Path, site: str) -> None:
+    """Regression: Jev's weak proposal (Home) was benign; the human picked Buy now. The risky
+    noul Jev gave was about its own proposal, so the pick must be re-checked, and blocked."""
+    jev = ScriptedJev(
+        # weak on both; Home is still Jev's argmax (0.52 vs 0.48)
+        [Thought("click", target="Home", prob=0.4, target_prob=0.52, risky=0.01)],
+        risk_of=_risky_if_next_step_mentions("Buy now"),
+    )
+    human = ScriptedHuman(picks={"operation": "click", "target": "e1"})  # e1 = Buy now
+
+    record, _, _ = _run(tmp_path, f"{site}/shop.html", "look at the book", jev, human=human)
+
+    assert record.status == "blocked"
+    assert "Buy now" in record.reason
+    assert _executed(record) == []
+    assert human.asked == ["operation", "target", "blocked"]
+    [risk_state] = jev.risk_calls
+    assert "NEXT STEP" in risk_state and 'click [e1: button "Buy now"]' in risk_state
+    assert risk_state.startswith("GOAL: look at the book")  # same state as the step, plus the step
+
+
+def test_a_human_pick_equal_to_jevs_proposal_is_not_rechecked(tmp_path: Path, site: str) -> None:
+    jev = ScriptedJev([Thought("scroll_down")] * 3 + [Thought("done", goal_done=0.9)])
+    human = ScriptedHuman(picks={"operation": "scroll_down"})
+
+    record, _, _ = _run(tmp_path, f"{site}/many.html", "find the last link", jev, human=human)
+
+    assert human.asked == ["operation"]
+    assert jev.risk_calls == []
     assert record.status == "done"

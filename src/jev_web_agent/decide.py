@@ -148,6 +148,24 @@ def decide(
     )
 
 
+def check_risk(
+    jev: JevClient,
+    goal: str,
+    obs: Observation,
+    history: Sequence[ActionRecord],
+    next_step: str,
+) -> float:
+    """A second, narrow Jev call: the ``risky`` Noul about one *specific* next step.
+
+    The fan-out call's ``risky`` answer was about Jev's own proposal. When a human picks a
+    different action, that answer says nothing about the pick, so ask again with the pick
+    (operation, element line, text) spelled out in the state.
+    """
+    state = f"{render_state(goal, obs, history)}\nNEXT STEP (about to be executed):\n{next_step}\n"
+    answers = jev.ask(state, {"risky": Noul(instructions=RISKY_STATEMENT)})
+    return answers.nouls["risky"]
+
+
 class TypeSafeJev:
     """``JevClient`` backed by the real ``typesafe-sdk`` synchronous client."""
 

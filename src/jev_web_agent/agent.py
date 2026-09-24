@@ -19,6 +19,7 @@ from jev_web_agent.decide import (
     ChoiceResult,
     Decision,
     JevClient,
+    check_risk,
     decide,
 )
 from jev_web_agent.human import Human, Option
@@ -244,12 +245,7 @@ class Agent:
         action = verdict.action
         assert action is not None
         if verdict.outcome == "block":
-            proposal = describe(action, obs)
-            if self.human.resolve_blocked(proposal):
-                step.human = "handled the risky step themselves; re-observing"
-                return False
-            step.human = "not handled"
-            return self._finish(record, "blocked", f"risky step not executed: {proposal}")
+            return self._block(record, step, action, obs)
 
         if verdict.outcome == "ask":
             picked = self._ask(decision, verdict, obs)
@@ -259,6 +255,15 @@ class Agent:
             step.human = f"picked {describe(picked, obs)}"
             if picked.operation == "done":
                 return self._finish(record, "done", "the human said the goal is done")
+            if picked != action:
+                # Jev's `risky` answer was about its own proposal, not about this pick.
+                risky = check_risk(self.jev, self.goal, obs, history, describe(picked, obs))
+                step.gate_reason += f"; human pick re-checked: risky={risky:.2f}"
+                if risky >= self.thresholds.risky:
+                    self.console.print(
+                        f"  [red]human pick is risky ({risky:.2f} >= {self.thresholds.risky})[/red]"
+                    )
+                    return self._block(record, step, picked, obs)
             action = picked
 
         result = act(self.page, action, last_operation=history[-1].operation if history else None)
@@ -272,6 +277,17 @@ class Agent:
         else:
             self.console.print(f"  [yellow]{escape(result.note)}[/yellow]")
         return False
+
+    def _block(self, record: RunRecord, step: StepRecord, action: Action, obs: Observation) -> bool:
+        """Never execute a risky step. The human may do it themselves, then we re-observe."""
+        proposal = describe(action, obs)
+        if self.human.resolve_blocked(proposal):
+            step.human = (
+                f"{step.human + '; ' if step.human else ''}handled the risky step themselves"
+            )
+            return False
+        step.human = f"{step.human + '; ' if step.human else ''}risky step not handled"
+        return self._finish(record, "blocked", f"risky step not executed: {proposal}")
 
     def _finish(self, record: RunRecord, status: str, reason: str) -> bool:
         record.status, record.reason = status, reason
