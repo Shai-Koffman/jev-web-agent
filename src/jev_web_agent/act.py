@@ -11,7 +11,7 @@ import contextlib
 from dataclasses import dataclass
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Page
+from playwright.sync_api import Locator, Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from jev_web_agent.models import Action, Operation
@@ -19,6 +19,7 @@ from jev_web_agent.models import Action, Operation
 ACTION_TIMEOUT_MS = 10_000
 LOAD_TIMEOUT_MS = 15_000
 NAVIGATION_GRACE_MS = 3_000
+NEW_TAB_GRACE_MS = 5_000
 TYPED_ATTR = "data-jev-typed"  # marks the element the last `type` filled
 
 _MARK_TYPED_JS = f"""el => {{
@@ -26,18 +27,47 @@ _MARK_TYPED_JS = f"""el => {{
   el.setAttribute('{TYPED_ATTR}', '1');
 }}"""
 
+# Is the click target (or its enclosing link) set to open in another browsing context?
+_OPENS_NEW_TAB_JS = """el => {
+  const a = el.closest('a[href]');
+  if (!a) return false;
+  const target = (a.getAttribute('target') || '').toLowerCase();
+  return target !== '' && !['_self', '_parent', '_top'].includes(target);
+}"""
+
 
 @dataclass(frozen=True)
 class ActResult:
     executed: bool
     note: str
     gone: bool = False
+    page: Page | None = None  # set when the action opened a new tab the agent should follow
 
 
 def _wait_for_page(page: Page) -> None:
     # A slow page is not fatal; the next observation shows whatever is there.
     with contextlib.suppress(PlaywrightError):
         page.wait_for_load_state("load", timeout=LOAD_TIMEOUT_MS)
+
+
+def _click(page: Page, locator: Locator) -> Page | None:
+    """Click. If the target opens a new tab, wait for it, bring it to front and return it."""
+    if not locator.evaluate(_OPENS_NEW_TAB_JS):
+        locator.click(timeout=ACTION_TIMEOUT_MS)
+        return None
+    clicked = False
+    try:
+        with page.context.expect_page(timeout=NEW_TAB_GRACE_MS) as new_tab:
+            locator.click(timeout=ACTION_TIMEOUT_MS)
+            clicked = True
+    except PlaywrightTimeoutError:
+        if clicked:
+            return None  # a new tab was expected but none opened (e.g. blocked): stay here
+        raise
+    opened = new_tab.value
+    _wait_for_page(opened)
+    opened.bring_to_front()
+    return opened
 
 
 def act(page: Page, action: Action, *, last_operation: Operation | None = None) -> ActResult:
@@ -54,7 +84,11 @@ def act(page: Page, action: Action, *, last_operation: Operation | None = None) 
             return ActResult(False, "type needs text")
         try:
             if action.operation == "click":
-                locator.click(timeout=ACTION_TIMEOUT_MS)
+                opened = _click(page, locator)
+                if opened is not None:
+                    return ActResult(
+                        True, f"clicked {action.target_id}; followed the new tab", page=opened
+                    )
                 note = f"clicked {action.target_id}"
             else:
                 assert action.text is not None

@@ -276,3 +276,13 @@ def test_press_enter_submits_the_box_that_was_typed_into(tmp_path: Path, site: s
     record, _, _ = _run(tmp_path, f"{site}/focus-thief.html", 'search for "Alan Turing"', jev)
 
     assert record.steps[2].url == f"{site}/results.html?q=Alan+Turing"
+
+
+def test_agent_observes_the_new_tab_a_click_opened(tmp_path: Path, site: str) -> None:
+    jev = ScriptedJev([Thought("click", target="new tab"), Thought("done", goal_done=0.9)])
+
+    record, _, _ = _run(tmp_path, f"{site}/newtab.html", "open the article", jev)
+
+    assert record.steps[1].url == f"{site}/article.html"
+    assert record.steps[1].title == "Alan Turing - Encyclopedia"
+    assert record.status == "done"

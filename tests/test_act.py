@@ -115,3 +115,24 @@ def test_press_enter_otherwise_presses_on_the_page(page: Page, site: str) -> Non
 
     assert page.url == f"{site}/search.html"
     assert page.input_value("textarea") == "\n"
+
+
+def test_click_that_opens_a_new_tab_follows_it(page: Page, site: str) -> None:
+    page.goto(f"{site}/newtab.html")
+
+    result = act(page, Action("click", target_id=_id_of(page, "Alan Turing (opens in a new tab)")))
+
+    assert result.executed
+    assert result.page is not None and result.page is not page
+    assert result.page.url == f"{site}/article.html"
+    assert result.page.title() == "Alan Turing - Encyclopedia"
+    assert page.url == f"{site}/newtab.html"  # the old tab stays where it was
+
+
+def test_ordinary_click_stays_on_the_same_page(page: Page, site: str) -> None:
+    page.goto(f"{site}/newtab.html")
+
+    result = act(page, Action("click", target_id=_id_of(page, "Home")))
+
+    assert result.page is None
+    assert page.url == f"{site}/search.html"

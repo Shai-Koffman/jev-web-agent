@@ -263,6 +263,8 @@ class Agent:
 
         result = act(self.page, action, last_operation=history[-1].operation if history else None)
         step.action, step.result = describe(action, obs), result.note
+        if result.page is not None:
+            self.page = result.page  # the click opened a new tab: observe that from now on
         if result.executed:
             element = obs.element(action.target_id) if action.target_id else None
             line = element.line() if element else None
