@@ -6,6 +6,8 @@ authors = [
     { name = "Shai Koffman", email = "6829594+Shai-Koffman@users.noreply.github.com" }
 ]
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "httpx2>=2.13.1",
     "playwright>=1.63.0",
