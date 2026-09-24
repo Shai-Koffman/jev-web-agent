@@ -1,0 +1,47 @@
+[project]
+name = "jev-web-agent"
+version = "0.1.0"
+description = "A small web agent driven only by Jev (TypeSafe System One): typed answers, confidence gates, a human when unsure."
+authors = [
+    { name = "Shai Koffman", email = "6829594+Shai-Koffman@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "playwright>=1.63.0",
+    "python-dotenv>=1.2.3",
+    "rich>=15.0.0",
+    "typesafe-sdk>=0.7.1",
+]
+
+[project.scripts]
+jev-agent = "jev_web_agent.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "ruff>=0.16.8",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "strict"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["live: calls the real TypeSafe API (needs TYPESAFE_API_KEY)"]
