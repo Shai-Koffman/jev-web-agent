@@ -77,13 +77,16 @@ def proposed_action(decision: Decision) -> Action:
     return Action(operation, target_id=target, text=None if text == NO_TEXT else text)
 
 
-def action_key(action: Action, obs: Observation) -> tuple[str, str | None, str]:
+LoopKey = tuple[str, str | None, str | None, str]  # (operation, target line, text, url)
+
+
+def action_key(action: Action, obs: Observation) -> LoopKey:
     element = obs.element(action.target_id) if action.target_id else None
-    return (action.operation, element.line() if element else None, obs.url)
+    return (action.operation, element.line() if element else None, action.text, obs.url)
 
 
-def record_key(record: ActionRecord) -> tuple[str, str | None, str]:
-    return (record.operation, record.target_line, record.url)
+def record_key(record: ActionRecord) -> LoopKey:
+    return (record.operation, record.target_line, record.text, record.url)
 
 
 def gate(

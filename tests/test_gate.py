@@ -183,3 +183,24 @@ def test_second_identical_action_still_passes() -> None:
 def test_repeat_on_a_different_url_or_target_is_not_a_loop() -> None:
     assert gate(decision(), [_record(url="https://other/"), _record()], OBS, TH).outcome == "pass"
     assert gate(decision(), [_record('e1: x "y"'), _record()], OBS, TH).outcome == "pass"
+
+
+def _typed(text: str) -> ActionRecord:
+    return ActionRecord("type", 'e1: searchbox "Search" value=""', text, URL)
+
+
+def test_typing_different_text_into_the_same_box_is_not_a_loop() -> None:
+    typing = decision("type", target="e1", text="Alan Turing")
+
+    verdict = gate(typing, [_typed("Turing"), _typed("Alan M. Turing")], OBS, TH)
+
+    assert verdict.outcome == "pass"
+
+
+def test_typing_the_same_text_three_times_is_a_loop() -> None:
+    typing = decision("type", target="e1", text="Alan Turing")
+
+    verdict = gate(typing, [_typed("Alan Turing"), _typed("Alan Turing")], OBS, TH)
+
+    assert verdict.outcome == "ask"
+    assert verdict.reason.startswith("loop")
