@@ -328,3 +328,29 @@ def test_a_human_pick_equal_to_jevs_proposal_is_not_rechecked(tmp_path: Path, si
     assert human.asked == ["operation"]
     assert jev.risk_calls == []
     assert record.status == "done"
+
+
+def test_jev_can_never_type_text_that_is_not_quoted_in_the_goal(tmp_path: Path, site: str) -> None:
+    jev = ScriptedJev([Thought("type", target="Search encyclopedia", text="DROP TABLE users")])
+
+    record, _, out = _run(tmp_path, f"{site}/search.html", 'search for "Alan Turing"', jev)
+
+    assert record.status == "aborted"
+    assert "'DROP TABLE users' is not one of the goal's quoted literals" in record.reason
+    assert record.steps[0].gate == "abort"
+    assert _executed(record) == []
+    assert "refused to type" in out
+
+
+def test_a_human_pick_can_never_type_unquoted_text(tmp_path: Path, site: str) -> None:
+    jev = ScriptedJev([Thought("type", target="Search encyclopedia", text="Alan Turing", prob=0.4)])
+    human = ScriptedHuman(picks={"operation": "type", "target": "e1", "text": "evil"})
+
+    record, _, _ = _run(
+        tmp_path, f"{site}/search.html", 'search for "Alan Turing"', jev, human=human
+    )
+
+    assert human.asked == ["operation", "target", "text"]
+    assert record.status == "aborted"
+    assert "'evil' is not one of the goal's quoted literals" in record.reason
+    assert _executed(record) == []

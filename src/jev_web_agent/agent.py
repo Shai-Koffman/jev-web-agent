@@ -21,6 +21,7 @@ from jev_web_agent.decide import (
     JevClient,
     check_risk,
     decide,
+    quoted_literals,
 )
 from jev_web_agent.human import Human, Option
 from jev_web_agent.models import OPERATIONS, Action, ActionRecord, Observation, as_operation
@@ -265,6 +266,17 @@ class Agent:
                     )
                     return self._block(record, step, picked, obs)
             action = picked
+
+        # Core safety invariant, enforced here for Jev's proposals and human picks alike: the
+        # agent only ever types text the user wrote in double quotes in the goal.
+        if action.operation == "type" and action.text not in quoted_literals(self.goal):
+            step.gate = "abort"
+            step.gate_reason = (
+                f"refused to type {action.text!r}: {action.text!r} is not one of the goal's "
+                "quoted literals"
+            )
+            self.console.print(f"  [red]{escape(step.gate_reason)}[/red]")
+            return self._finish(record, "aborted", step.gate_reason)
 
         result = act(self.page, action, last_operation=history[-1].operation if history else None)
         step.action, step.result = describe(action, obs), result.note
