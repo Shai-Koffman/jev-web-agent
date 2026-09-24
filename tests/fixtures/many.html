@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Many links</title>
+<style>a { display: block; height: 40px; }</style></head>
+<body>
+  <h1>A long list</h1>
+  <div id="list"></div>
+  <script>
+    const list = document.getElementById("list");
+    for (let i = 1; i <= 100; i++) {
+      const a = document.createElement("a");
+      a.href = "#item-" + i;
+      a.textContent = "Link " + i;
+      list.appendChild(a);
+    }
+  </script>
+</body>
+</html>
