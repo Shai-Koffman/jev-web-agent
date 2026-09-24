@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
@@ -71,12 +72,15 @@ class ScriptedJev:
     """A JevClient that replays ``thoughts`` one per call (repeating the last one)."""
 
     thoughts: Sequence[Thought]
+    think_seconds: float = 0.0  # simulated model latency (the page may change meanwhile)
     calls: list[tuple[str, Mapping[str, Question]]] = field(
         default_factory=lambda: list[tuple[str, Mapping[str, Question]]]()
     )
 
     def ask(self, state: str, questions: Mapping[str, Question]) -> JevAnswers:
         thought = self.thoughts[min(len(self.calls), len(self.thoughts) - 1)]
+        if self.think_seconds:
+            time.sleep(self.think_seconds)
         self.calls.append((state, questions))
         choices: dict[str, ChoiceResult] = {}
         nouls: dict[str, float] = {}

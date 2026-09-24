@@ -3,11 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
-from jev_web_agent.decide import NO_TEXT, ChoiceResult, Decision
+from playwright.sync_api import Page
+from rich.console import Console
+
+from jev_web_agent.act import act
+from jev_web_agent.decide import (
+    NO_TEXT,
+    OPERATION_CRITERIA,
+    ChoiceResult,
+    Decision,
+    JevClient,
+    decide,
+)
+from jev_web_agent.human import Human, Option
 from jev_web_agent.models import Action, ActionRecord, Observation, as_operation
+from jev_web_agent.observe import observe
+from jev_web_agent.report import RunRecord, StepRecord, write_report
 
 GateOutcome = Literal["pass", "done", "block", "ask"]
 
@@ -96,3 +112,204 @@ def gate(
         return Verdict("ask", f"loop: same action {th.loop_repeats}x in a row", action)
 
     return Verdict("pass", "all relevant answers passed", action)
+
+
+# --- the loop -------------------------------------------------------------------------------
+
+
+def describe(action: Action, obs: Observation) -> str:
+    parts = [action.operation]
+    element = obs.element(action.target_id) if action.target_id else None
+    if action.target_id:
+        parts.append(f"[{element.line() if element else action.target_id}]")
+    if action.text is not None:
+        parts.append(f'text="{action.text}"')
+    return " ".join(parts)
+
+
+def step_line(number: int, obs: Observation, decision: Decision, verdict: Verdict) -> str:
+    """One rich-markup terminal line per step."""
+    op = decision.operation
+    top = "  ".join(f"{o} {p:.2f}" for o, p in op.top(3))
+    target = ""
+    if decision.target is not None and op.choice in ("click", "type"):
+        element = obs.element(decision.target.choice)
+        line = element.line() if element else decision.target.choice
+        target = (
+            f" │ {line} (p {decision.target.probability:.2f}, "
+            f"conf {decision.target.confidence:.2f})"
+        )
+    colour = {"pass": "green", "done": "cyan", "block": "red", "ask": "yellow"}[verdict.outcome]
+    return (
+        f"[bold]step {number}[/bold] │ [bold]{op.choice}[/bold]{target} │ {top} │ "
+        f"conf {op.confidence:.2f} │ done {decision.goal_done:.2f} risky {decision.risky:.2f} │ "
+        f"[{colour}]{verdict.outcome.upper()}[/{colour}] {verdict.reason}"
+    )
+
+
+class Agent:
+    """Observe -> decide (one Jev call) -> gate -> act, until done / blocked / aborted."""
+
+    def __init__(
+        self,
+        page: Page,
+        jev: JevClient,
+        human: Human,
+        *,
+        goal: str,
+        start_url: str,
+        run_dir: Path,
+        console: Console,
+        thresholds: Thresholds | None = None,
+        max_steps: int = 15,
+        model: str = "jev-latest",
+    ) -> None:
+        self.page = page
+        self.jev = jev
+        self.human = human
+        self.goal = goal
+        self.start_url = start_url
+        self.run_dir = run_dir
+        self.console = console
+        self.thresholds = thresholds or Thresholds()
+        self.max_steps = max_steps
+        self.model = model
+
+    def run(self) -> RunRecord:
+        record = RunRecord(
+            goal=self.goal,
+            start_url=self.start_url,
+            started=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            model=self.model,
+            thresholds={k: float(v) for k, v in asdict(self.thresholds).items()},
+        )
+        history: list[ActionRecord] = []
+        try:
+            self.page.goto(self.start_url, wait_until="load")
+            for number in range(1, self.max_steps + 1):
+                if self._step(number, record, history):
+                    break
+            else:
+                record.status = "max_steps"
+                record.reason = f"stopped after --max-steps {self.max_steps}"
+        except Exception as exc:  # report whatever happened, then let the caller decide
+            record.status = "error"
+            record.reason = f"{type(exc).__name__}: {exc}"
+            self.console.print(f"[bold red]error:[/bold red] {record.reason}")
+        finally:
+            write_report(self.run_dir, record)
+        return record
+
+    def _step(self, number: int, record: RunRecord, history: list[ActionRecord]) -> bool:
+        """Run one step. Returns True when the run is finished."""
+        obs = observe(self.page)
+        shot = f"step-{number:02d}.png"
+        self.page.screenshot(path=str(self.run_dir / shot))
+        step = StepRecord(
+            number=number,
+            url=obs.url,
+            title=obs.title,
+            screenshot=shot,
+            elements=[e.line() for e in obs.elements],
+            decision=None,
+            gate="error",
+            gate_reason="Jev call did not complete",
+            human=None,
+            action=None,
+            result="",
+        )
+        record.steps.append(step)
+
+        decision = decide(self.jev, self.goal, obs, history)
+        verdict = gate(decision, history, obs, self.thresholds)
+        step.decision, step.gate, step.gate_reason = decision, verdict.outcome, verdict.reason
+        self.console.print(step_line(number, obs, decision, verdict))
+
+        if verdict.outcome == "done":
+            return self._finish(record, "done", verdict.reason)
+
+        action = verdict.action
+        assert action is not None
+        if verdict.outcome == "block":
+            proposal = describe(action, obs)
+            if self.human.resolve_blocked(proposal):
+                step.human = "handled the risky step themselves; re-observing"
+                return False
+            step.human = "not handled"
+            return self._finish(record, "blocked", f"risky step not executed: {proposal}")
+
+        if verdict.outcome == "ask":
+            picked = self._ask(decision, verdict, obs)
+            if picked is None:
+                step.human = "aborted"
+                return self._finish(record, "aborted", f"{verdict.reason}; no human pick")
+            step.human = f"picked {describe(picked, obs)}"
+            if picked.operation == "done":
+                return self._finish(record, "done", "the human said the goal is done")
+            action = picked
+
+        result = act(self.page, action)
+        step.action, step.result = describe(action, obs), result.note
+        if result.executed:
+            element = obs.element(action.target_id) if action.target_id else None
+            line = element.line() if element else None
+            history.append(ActionRecord(action.operation, line, action.text, obs.url))
+        else:
+            self.console.print(f"  [yellow]{result.note}[/yellow]")
+        return False
+
+    def _finish(self, record: RunRecord, status: str, reason: str) -> bool:
+        record.status, record.reason = status, reason
+        return True
+
+    def _ask(self, decision: Decision, verdict: Verdict, obs: Observation) -> Action | None:
+        """Show Jev's top-3 for each relevant question that needs a human; None = abort."""
+        assert verdict.action is not None
+        loop = verdict.reason.startswith("loop")
+        operation = verdict.action.operation
+        if loop or "operation" in verdict.weak:
+            picked = self.human.pick(
+                "operation", verdict.reason, self._options("operation", decision, obs)
+            )
+            if picked is None:
+                return None
+            operation = as_operation(picked)
+        chosen: dict[str, str | None] = {"target": None, "text": None}
+        for question in relevant_questions(operation)[1:]:
+            answer = answer_for(decision, question)
+            ok = passes(answer, self.thresholds) and not (
+                question == "text" and answer is not None and answer.choice == NO_TEXT
+            )
+            if answer is not None and ok and not loop:
+                chosen[question] = answer.choice
+                continue
+            options = self._options(question, decision, obs)
+            if not options:
+                return None  # nothing to pick from (no elements / no quoted literals)
+            picked = self.human.pick(question, verdict.reason, options)
+            if picked is None:
+                return None
+            chosen[question] = picked
+        return Action(operation, target_id=chosen["target"], text=chosen["text"])
+
+    @staticmethod
+    def _options(question: str, decision: Decision, obs: Observation) -> list[Option]:
+        answer = answer_for(decision, question)
+        if answer is None:
+            return []
+        ranked = [
+            (o, p)
+            for o, p in answer.top(len(answer.probabilities))
+            if not (question == "text" and o == NO_TEXT)
+        ][:3]
+        options: list[Option] = []
+        for option, probability in ranked:
+            if question == "operation":
+                meaning = OPERATION_CRITERIA.get(option, "")
+            elif question == "target":
+                element = obs.element(option)
+                meaning = element.line() if element else ""
+            else:
+                meaning = f'type "{option}"'
+            options.append((option, probability, meaning))
+        return options

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Vanishing button</title></head>
+<body>
+  <h1>Now you see it</h1>
+  <button id="ghost" type="button" onclick="document.title = 'CLICKED'">Ghost button</button>
+  <a href="search.html">Home</a>
+  <script>
+    // Simulates a page that changes while Jev is thinking: once the agent has tagged the
+    // button, it disappears 200ms later.
+    const ghost = document.getElementById("ghost");
+    new MutationObserver(() => {
+      if (ghost.hasAttribute("data-jev-id")) setTimeout(() => ghost.remove(), 200);
+    }).observe(ghost, { attributes: true, attributeFilter: ["data-jev-id"] });
+  </script>
+</body>
+</html>
