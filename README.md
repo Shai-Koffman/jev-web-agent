@@ -99,12 +99,8 @@ observe ──► decide (1 Jev call) ──► gate ──► act ──┐
    elements first. Each element becomes one line, such as `e3: searchbox "Search Wikipedia"
    value=""`. The state is the goal, url, title, a text excerpt of up to 3,000 characters, the
    element lines, and the last 5 actions.
-2. **Decide** (`decide.py`). One Jev call asks five questions at once:
-   - `operation` (Choice): `click`, `type`, `press_enter`, `scroll_down`, `go_back` or `done`
-   - `target` (Choice): one option per element id
-   - `text` (Choice): the goal's quoted literals, plus `(none)`
-   - `goal_done` (Noul)
-   - `risky` (Noul)
+2. **Decide** (`decide.py`). One Jev call asks five questions at once, listed with their
+   exact options in [The five questions](#the-five-questions) below.
 3. **Gate** (`agent.py`). The checks run in this order:
    - `goal_done ≥ 0.8`, or a confident `done` → finish.
    - An unknown operation → abort.
@@ -115,6 +111,102 @@ observe ──► decide (1 Jev call) ──► gate ──► act ──┐
 4. **Act** (`act.py`). The target is re-queried by `data-jev-id` just before acting; if it has
    gone, the agent re-observes. Clicks that time out also re-observe. A new tab opened by a
    link is followed. After a `type`, Enter goes to the box that was typed into.
+
+### Jev decides, code controls
+
+| Jev does | Code does |
+| --- | --- |
+| Picks one option per Choice question and gives every option a probability | Turns the page into text: elements, excerpt, recent actions |
+| Gives a confidence for each Choice answer | Decides whether the answers are good enough to act on |
+| Gives a probability for each yes/no (Noul) statement | Blocks risky steps, asks a human, detects loops |
+| | Performs the action with Playwright |
+
+Jev never writes text, never sees pixels and keeps no memory between calls. It can only type
+one of the goal's double-quoted phrases, and the code checks that again before any `type`
+runs. When a human picks something other than Jev's own choice, the agent makes a second Jev
+call that asks only the `risky` question about that pick.
+
+### The five questions
+
+Every step sends the same five questions with the page as `state`
+([`build_questions`](src/jev_web_agent/decide.py)).
+
+**`operation`** (Choice): *"Which single browser operation should be taken next to make
+progress toward the GOAL?"*
+
+| Option | Description Jev reads |
+| --- | --- |
+| `click` | Click one of the listed interactive elements (a link, button, tab or menu item) because following or activating it leads toward the goal. |
+| `type` | Type one of the goal's quoted text values into a listed text box or search box that does not already contain it. |
+| `press_enter` | Press Enter to submit the text that was just typed; the box already shows the value the goal asks for. |
+| `scroll_down` | Scroll down because what the goal needs is probably further down this page. |
+| `go_back` | Go back to the previous page because this page is a wrong turn. |
+| `done` | Stop: the current page already shows what the goal asks for. |
+
+**`target`** (Choice): *"If the next step clicks or types, which listed interactive element
+should it act on to make progress toward the GOAL?"* One option per element on the page (up
+to 60), each described by its element line, e.g. `e57` → `e57: link "Guido van Rossum"`.
+
+**`text`** (Choice): *"If the next step types text, which of the GOAL's quoted values should
+be typed?"* One option per quoted phrase in the goal, plus `(none)`. For the goal
+`search for "Python", ...` the options are `Python` → *Type "Python"* and `(none)` →
+*Nothing needs to be typed next.* Asked only when the goal has quoted phrases.
+
+**`goal_done`** (Noul): *"The goal has been achieved on the current page."*
+
+**`risky`** (Noul): *"Taking this next step would buy, pay, send a message, post, delete,
+submit personal data, or log in."*
+
+### Example: one real decision
+
+Step 4 of the live run with the goal `search for "Python", get to the article about the
+programming language (not the snake), then open the article about its creator`
+(24/09/2026, `typesafe/jev-1.13` via OpenRouter).
+
+The state Jev read (trimmed):
+
+```text
+GOAL: search for "Python", get to the article about the programming language (not the snake), then open the article about its creator
+URL: https://en.wikipedia.org/wiki/Python_(programming_language)
+TITLE: Python (programming language) - Wikipedia
+
+PAGE TEXT (excerpt):
+... Python Paradigm Multi-paradigm: object-oriented, procedural (imperative), functional,
+structured, reflective Designed by Guido van Rossum Developer Python Software Foundation ...
+
+INTERACTIVE ELEMENTS (id: role "name"):
+e1: button "Main menu"
+e3: searchbox "Search Wikipedia" value=""
+...
+e56: link "Designed by"
+e57: link "Guido van Rossum"
+e58: link "Developer"
+...
+e60: link "[2]"
+
+LAST ACTIONS (oldest first):
+1. type [e3: searchbox "Search Wikipedia" value=""] text="Python" on https://en.wikipedia.org/wiki/Main_Page
+2. press_enter on https://en.wikipedia.org/wiki/Main_Page
+3. click [e37: link "Python (programming language)"] on https://en.wikipedia.org/wiki/Python
+```
+
+Jev's answers, with the probability of every option:
+
+| Question | Answer | Probabilities | Confidence |
+| --- | --- | --- | --- |
+| `operation` | `click` | click 0.99 · scroll_down 0.01 · type 0.00 · press_enter 0.00 · go_back 0.00 · done 0.00 | 0.99 |
+| `target` | `e57` | e57 1.00 · the other 59 elements 0.00 | 1.00 |
+| `text` | `(none)` | (none) 0.90 · Python 0.10 | 0.79 |
+| `goal_done` | | 0.09 | |
+| `risky` | | 0.09 | |
+
+What the code did with them: `goal_done` 0.09 is below 0.8 and `risky` 0.09 is below 0.3.
+A click needs `operation` and `target`, and both are above probability 0.55 and confidence
+0.35, so the gate passed and the agent clicked `e57`. The `text` answer is ignored because a
+click types nothing. On the next step `goal_done` was 0.96 and the run finished.
+
+This call took 0.31 s and cost $0.000146 (3,474 input tokens; output is free). Across the
+five live runs (15 calls), a decision took 0.31 to 0.69 s and cost $0.00005 to $0.00015.
 
 The full walk-through, with Mermaid diagrams, is in [docs/design.md](docs/design.md). The
 original spec is [docs/spec.md](docs/spec.md).
