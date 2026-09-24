@@ -1,42 +1,92 @@
 # jev-web-agent
 
-A small, readable example of driving a web browser with **Jev**, TypeSafe's System One model,
-and nothing else. No LLM anywhere. When Jev isn't confident, a human picks.
+A small, readable web agent driven only by **Jev**, TypeSafe's System One decision model, with
+no LLM anywhere. Jev never writes text or actions. On each step the agent turns the page into
+text, asks Jev five typed questions in one call (which operation, which element, which quoted
+text, is the goal done, is the next step risky), and gets back calibrated probabilities. Code
+then decides whether those answers are good enough to act on. When they aren't, a human picks
+from Jev's top three, and risky steps are never executed.
 
-## What Jev is
+![A run report: the step card shows the page Jev saw and its answers, with the chosen link (e57, "Guido van Rossum") at p 1.00](docs/images/report.png)
 
-Jev does not generate text or actions. You send it a text `state` plus typed questions, and it
-returns typed answers:
+*A real run's `report.html`: step 4 of "search for "Python", get to the article about the
+programming language (not the snake), then open the article about its creator". The report
+shows each step's screenshot, the elements sent to Jev, every answer's probabilities and
+confidence, and the gate's decision.*
 
-| Question | Answer | Used here for |
+How it works in detail, with diagrams, a real request and response, and live results:
+**[docs/design.md](docs/design.md)**.
+
+## Quickstart
+
+Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
+
+```sh
+git clone https://github.com/Shai-Koffman/jev-web-agent.git
+cd jev-web-agent
+uv sync
+uv run playwright install chromium
+cp .env.example .env
+```
+
+Put one key in `.env`:
+
+- `OPENROUTER_API_KEY=...`: Jev on OpenRouter as `typesafe/jev-1.13` (get a key at
+  <https://openrouter.ai/settings/keys>), or
+- `TYPESAFE_API_KEY=...`: Jev on TypeSafe's own API.
+
+Then run a starter task and watch the browser:
+
+```sh
+uv run jev-agent --task wiki     # en.wikipedia.org: search "Alan Turing", open his article
+uv run jev-agent --task hn       # news.ycombinator.com: open the top story's comments
+uv run jev-agent --task books    # books.toscrape.com: open "A Light in the Attic"
+```
+
+Or give it your own goal. Put any text it may type in double quotes:
+
+```sh
+uv run jev-agent --goal 'search for "Ada Lovelace" and open her article' --url https://en.wikipedia.org
+```
+
+## See it run
+
+The terminal prints one line per step: the operation, the target element with its probability
+and confidence, the operation's top three, the two Noul values, and the gate's verdict. This is
+the Python run replayed from its `run.json`:
+
+![Terminal output of a five-step run: type, press_enter, click, click, done](docs/images/terminal.svg)
+
+The same run in the browser:
+
+| Step 3: the disambiguation page | Step 4: the programming language | Step 5: goal reached |
 | --- | --- | --- |
-| `Choice` | the chosen option, a probability for every option, and a `confidence` | which operation, which element, which text |
-| `Noul` | one number: the probability the statement is true (a Noul has no separate confidence) | "is the goal done?", "is the next step risky?" |
-| `Score` | ordered levels; not used here | |
+| ![Wikipedia's "Python" disambiguation page](docs/images/python-disambiguation.png) | ![Wikipedia's "Python (programming language)" article](docs/images/python-language-article.png) | ![Top of Wikipedia's "Guido van Rossum" article](docs/images/guido-article.png) |
 
-It is text only, so the page is turned into text first. Docs: <https://docs.typesafe.ai/llms.txt>.
+On step 3 Jev picked `e37: link "Python (programming language)"` with p 0.97, choosing it over
+the snakes. On step 4 it picked `e57: link "Guido van Rossum"` with p 1.00.
 
-### Two backends, same model
+## Safety
 
-| `--backend` | Endpoint | Key | Default model | Client |
-| --- | --- | --- | --- | --- |
-| `openrouter` | `POST https://openrouter.ai/api/alpha/decisions` | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` | `openrouter.py`, a thin httpx2 adapter |
-| `typesafe` | `POST https://api.typesafe.ai/v1/systemone` | `TYPESAFE_API_KEY` | `jev-latest` | the `typesafe-sdk` `TypeSafeClient` |
+This is an example, not a product. Read this before pointing it anywhere.
 
-If you don't pass `--backend`, the agent uses `openrouter` when `OPENROUTER_API_KEY` is set and
-`typesafe` otherwise. OpenRouter's Decisions API takes the same `model` / `state` / `questions`
-request and returns the same `answers`, with two differences:
+- **It only types what you quoted.** The only text the agent can ever type is a double-quoted
+  literal from your goal. Jev chooses among those literals and cannot invent text. Code checks
+  it again before every `type`, including one a human picked, and aborts the run if it doesn't
+  match.
+- **Risky steps are blocked.** Every step asks Jev whether the next step would buy, pay, send
+  a message, post, delete, submit personal data or log in. At a probability of 0.3 or more the
+  agent does not execute it. When a human overrides Jev's choice, that pick gets its own risk
+  check.
+- **Unsure means stop.** Low probability or confidence, or the same action three times, stops
+  and asks a human. With `--no-ask` it aborts instead.
+- **Don't use it where one click can buy or send.** The risk check is a model's probability,
+  not a guarantee. Use read-only sites, and never run it logged in to accounts that can spend
+  money or send messages.
+- Keys are loaded from `.env`, which is gitignored. They are never printed or written to a
+  report.
 
-- `usage` also includes `cost` in USD.
-- A choice answer only guarantees `choice`, so a missing `confidence` or `probabilities` is read
-  as zero certainty, which fails the gate.
-
-On OpenRouter the context limit is 32k tokens. A run on OpenRouter also writes `usage.json`,
-with per-call latency, tokens and cost (call *n* is step *n*).
-
-## How the loop works
-
-Each step runs four stages:
+## How it works
 
 ```
 observe ──► decide (1 Jev call) ──► gate ──► act ──┐
@@ -44,122 +94,65 @@ observe ──► decide (1 Jev call) ──► gate ──► act ──┐
    └────────────────────────────────────────────────┘
 ```
 
-1. **Observe** (`observe.py`). Playwright tags each visible, enabled interactive element (links,
-   buttons, inputs, textareas, selects, and ARIA buttons/links/textboxes/tabs/menu items) with
+1. **Observe** (`observe.py`). Playwright tags visible, enabled interactive elements with
    `data-jev-id`. Tagging runs in document order and stops at 60 elements, taking in-viewport
-   elements first. Each element becomes one line:
-
-   ```
-   e1: searchbox "Search encyclopedia" value=""
-   e2: button "Search"
-   e3: link "About"
-   ```
-
-   An `Observation` holds the url, the title, a text excerpt of up to 3,000 characters, and the
-   elements. `render_state` turns it into the state text: goal, url, title, excerpt, element
-   lines, and the last 5 actions.
-
-2. **Decide** (`decide.py`). One Jev call asks all five questions together (speculative
-   fan-out), and the code then uses only the answers it needs:
+   elements first. Each element becomes one line, such as `e3: searchbox "Search Wikipedia"
+   value=""`. The state is the goal, url, title, a text excerpt of up to 3,000 characters, the
+   element lines, and the last 5 actions.
+2. **Decide** (`decide.py`). One Jev call asks five questions at once:
    - `operation` (Choice): `click`, `type`, `press_enter`, `scroll_down`, `go_back` or `done`
-   - `target` (Choice): one option per element id, described by its element line
-   - `text` (Choice): the goal's double-quoted literals plus `(none)`. **The agent can only
-     ever type text you wrote in quotes in the goal.**
-   - `goal_done` (Noul): "The goal has been achieved on the current page."
-   - `risky` (Noul): "Taking this next step would buy, pay, send a message, post, delete,
-     submit personal data, or log in."
+   - `target` (Choice): one option per element id
+   - `text` (Choice): the goal's quoted literals, plus `(none)`
+   - `goal_done` (Noul)
+   - `risky` (Noul)
+3. **Gate** (`agent.py`). The checks run in this order:
+   - `goal_done ≥ 0.8`, or a confident `done` → finish.
+   - An unknown operation → abort.
+   - `risky ≥ 0.3` → block.
+   - Each answer the chosen operation depends on needs probability ≥ 0.55 and
+     confidence ≥ 0.35. Otherwise → ask a human.
+   - The same action three times in a row → ask a human.
+4. **Act** (`act.py`). The target is re-queried by `data-jev-id` just before acting; if it has
+   gone, the agent re-observes. Clicks that time out also re-observe. A new tab opened by a
+   link is followed. After a `type`, Enter goes to the box that was typed into.
 
-   All Jev access goes through the `JevClient` protocol. `TypeSafeJev` is the real client, and
-   the tests use a scripted fake.
+The full walk-through, with Mermaid diagrams, is in [docs/design.md](docs/design.md). The
+original spec is [docs/spec.md](docs/spec.md).
 
-3. **Gate** (`agent.py`). Code, not Jev, decides whether to act. The checks run in this order:
-   - `goal_done ≥ 0.8`, or operation `done` passing the gate → **finish**.
-   - `risky ≥ 0.3` → **blocked**. The step is never executed. You're asked whether you'll do
-     it yourself in the browser (the agent then re-observes) or abort.
-   - Every answer the chosen operation depends on (`operation`; plus `target` for click/type;
-     plus `text` for type) needs probability ≥ 0.55 and confidence ≥ 0.35. If any answer falls
-     short, the terminal shows Jev's **top 3** for that question and you pick one or abort.
-     If what you pick differs from Jev's proposal, a second, narrow Jev call asks `risky`
-     about your pick, described in the state as the next step. If that answer is ≥ 0.3, the
-     pick is **blocked** too.
-   - The same (operation, target, text, url) three times in a row → **ask** you.
-   - If Jev returns an operation that isn't in the list, the run **aborts** and the report
-     says why.
-   - `--no-ask` aborts wherever it would have asked (for tests and CI). `--max-steps` defaults
-     to 15.
+## Backends
 
-4. **Act** (`act.py`). The target is re-queried by `data-jev-id` just before acting. If it has
-   disappeared or been hidden, nothing is executed and the loop re-observes. Otherwise
-   Playwright performs the action and waits for the page to load. Three cases get special
-   handling:
-   - A click or type that times out (for example, an overlay covers the target) re-observes
-     instead of ending the run.
-   - A click that opens a new tab is followed, and the agent observes the new tab from the
-     next step.
-   - After a `type`, `press_enter` presses Enter on the box that was typed into, not on
-     whatever currently has focus.
+| `--backend` | Endpoint | Key | Default model |
+| --- | --- | --- | --- |
+| `openrouter` | `POST https://openrouter.ai/api/alpha/decisions` | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` |
+| `typesafe` | `POST https://api.typesafe.ai/v1/systemone` | `TYPESAFE_API_KEY` | `jev-latest` |
 
-## Setup
+If you don't pass `--backend`, the agent uses `openrouter` when `OPENROUTER_API_KEY` is set and
+`typesafe` otherwise. Both backends sit behind the same `JevClient` protocol. OpenRouter runs
+also write `usage.json`, with per-call latency, tokens and cost.
 
-Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
+## Options
 
-```sh
-uv sync
-uv run playwright install chromium
-cp .env.example .env        # then fill in OPENROUTER_API_KEY=... (or TYPESAFE_API_KEY=...)
-```
+`--task wiki|hn|books` or `--goal '...' --url ...` · `--backend` · `--headless` (the browser
+is headed by default) · `--no-ask` · `--max-steps N` (default 15) · `--min-prob` ·
+`--min-conf` · `--done-threshold` · `--risky-threshold` · `--runs-dir` · `--model`.
 
-`.env` is loaded from the directory you run in, if it exists. Keys are never printed or written
-to a report.
-
-## Running
-
-```sh
-uv run jev-agent --task wiki     # en.wikipedia.org: search "Alan Turing", open his article
-uv run jev-agent --task hn       # news.ycombinator.com: open the top story's comments
-uv run jev-agent --task books    # books.toscrape.com: open "A Light in the Attic"
-
-uv run jev-agent --goal 'Search for "rust borrow checker"' --url https://duckduckgo.com
-```
-
-The browser runs headed by default so you can watch it. Other useful flags: `--backend`,
-`--headless`, `--no-ask`, `--max-steps N`, `--min-prob`, `--min-conf`, `--done-threshold`,
-`--risky-threshold`, `--runs-dir`, `--model`.
-
-The terminal prints one line per step:
-
-```
-step 3 │ click │ e2: link "Alan Turing" (p 0.72, conf 0.58) │ click 0.72  type 0.06  press_enter 0.06 │ conf 0.66 │ done 0.02 risky 0.01 │ PASS all relevant answers passed
-```
-
-The fields are: step number, chosen operation, target element with its probability and
-confidence, the operation's top 3, the operation's confidence, the two Noul values, and the
-gate result.
-
-The exit code is 0 when the goal was reached, 1 for any other ending (aborted, blocked,
-max steps, error), and 2 when the API key is missing.
+The exit code is 0 when the goal was reached, 1 for any other ending (aborted, blocked, max
+steps, error), and 2 when the API key is missing.
 
 ## Reading a report
 
 Every run writes `runs/<YYYY-MM-DD_HH-MM-SS>/`:
 
-- `report.html`: a self-contained page, with no scripts and no external assets. It opens with
-  the goal, the final status and why, the start URL, and the gate thresholds. Each step then
-  shows:
-  - the **screenshot** Jev's state was built from (`step-NN.png`, in the same folder)
-  - the **elements sent**: the exact element lines Jev chose among
-  - the **gate decision** (PASS / DONE / BLOCK / ASK) and its reason, any human input, the
-    action executed, and what happened
-  - **Jev's full answers**: every option's probability for `operation`, `target` and `text`,
-    with the chosen option in bold and its confidence, plus both Noul values
-  - the exact state text sent to Jev (collapsed)
+- `report.html`: a self-contained page, with no scripts and no external assets. For each step
+  it shows the screenshot, the elements sent to Jev, the gate decision and reason, any human
+  input, the action and its result, and every option's probability and confidence for each
+  question. The exact state text sent to Jev is collapsed under each step.
 - `run.json`: the same data, machine-readable.
-- `usage.json` (OpenRouter runs only): latency, input and output tokens, and cost for each call,
-  plus totals.
+- `usage.json` (OpenRouter only): latency, tokens and cost for each call.
 
-To diagnose a bad step, look at the answers. A flat distribution with low confidence means Jev
-couldn't tell the options apart, so check the element lines. A confident wrong answer usually
-means the goal wording or an element name is misleading.
+A flat distribution with low confidence means Jev couldn't tell the options apart, so check the
+element lines. A confident wrong answer usually means the goal wording or an element name is
+misleading.
 
 ## Development
 
@@ -167,12 +160,17 @@ means the goal wording or an element name is misleading.
 uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run pytest
 ```
 
-Unit tests are hermetic. They use a scripted fake `JevClient` and local HTML fixtures from
-`tests/fixtures/`, served by a small local HTTP server. The loop tests call `cli.run` exactly as
-`jev-agent` does and inject only the fake Jev (and a scripted human where one is asked). The
-real SDK adapter is tested against the real `typesafe-sdk` client with only its HTTP transport
-replaced: the TypeSafe SDK and `OpenRouterJev` both run for real over a mock transport, and one
-test runs the whole CLI on the OpenRouter backend that way. Every test runs with provider keys
-removed from the environment and a working directory that has no `.env`. `tests/test_live.py`
-has one real call per backend. Each is skipped unless its key is set; if `.env` has
-`OPENROUTER_API_KEY`, the OpenRouter one runs as part of `pytest`.
+The tests are hermetic. They use a scripted fake `JevClient` and local HTML fixtures in
+`tests/fixtures/`, served by a small local HTTP server. The loop tests call `cli.run` exactly
+as `jev-agent` does, injecting only the fake Jev (and a scripted human where one is asked).
+Both real clients (the TypeSafe SDK and `OpenRouterJev`) are tested with only their HTTP
+transport replaced. `tests/test_live.py` makes one real call per backend, and each is skipped
+unless its key is set.
+
+## License
+
+[MIT](LICENSE) © Shai Koffman.
+
+The screenshots in `docs/images/` show pages from Wikipedia, whose text is available under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Jev and TypeSafe are
+TypeSafe's; this project is an independent example that uses their API.
