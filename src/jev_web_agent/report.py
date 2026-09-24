@@ -33,7 +33,7 @@ class RunRecord:
     start_url: str
     started: str
     model: str
-    thresholds: dict[str, float]
+    thresholds: dict[str, float | int]
     status: str = "running"  # done | aborted | blocked | max_steps | error
     reason: str = ""
     steps: list[StepRecord] = field(default_factory=lambda: list[StepRecord]())

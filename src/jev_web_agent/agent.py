@@ -182,7 +182,7 @@ class Agent:
             start_url=self.start_url,
             started=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
             model=self.model,
-            thresholds={k: float(v) for k, v in asdict(self.thresholds).items()},
+            thresholds=asdict(self.thresholds),
         )
         history: list[ActionRecord] = []
         try:
