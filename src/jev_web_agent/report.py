@@ -82,7 +82,7 @@ h1 { font-size:20px; margin:0 0 4px; }
 .badge { display:inline-block; padding:1px 8px; border-radius:99px; color:#fff; font-size:12px;
   font-weight:600; text-transform:uppercase; }
 .pass { background:var(--pass); } .done { background:var(--done); }
-.block, .error, .aborted, .blocked { background:var(--block); }
+.block, .error, .aborted, .blocked, .abort { background:var(--block); }
 .ask, .gone, .max_steps { background:var(--ask); }
 table { border-collapse:collapse; width:100%; margin:6px 0 10px; }
 td { padding:2px 6px; border-bottom:1px solid var(--line); vertical-align:top; }

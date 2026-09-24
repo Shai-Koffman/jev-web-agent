@@ -38,7 +38,9 @@ def confidence_of(probabilities: Mapping[str, float]) -> float:
 
 
 def choice_result(options: Sequence[str], chosen: str, prob: float) -> ChoiceResult:
-    """A distribution with ``prob`` on ``chosen`` and the rest spread evenly."""
+    """A distribution with ``prob`` on ``chosen`` and the rest spread evenly. ``chosen`` need
+    not be one of ``options`` (a hallucinated answer); it still gets ``prob``."""
+    options = list(options) if chosen in options else [*options, chosen]
     others = [o for o in options if o != chosen]
     rest = (1.0 - prob) / len(others) if others else 0.0
     probabilities = {o: (prob if o == chosen else rest) for o in options}
@@ -57,6 +59,9 @@ class Thought:
 
     ``target`` is a substring of the element line to pick (the fake reads the target question's
     criteria, just as the real model reads them), so scripts survive element renumbering.
+
+    ``target_id`` / ``raw_operation`` are returned verbatim, even when they are not among the
+    question's options - to script a malformed or hallucinated answer.
     """
 
     operation: Operation
@@ -65,6 +70,8 @@ class Thought:
     goal_done: float = 0.02
     risky: float = 0.01
     prob: float = 0.9
+    target_id: str | None = None
+    raw_operation: str | None = None
 
 
 @dataclass
@@ -103,8 +110,10 @@ class ScriptedJev:
         criteria = criteria_of(question)
         options = list(criteria)
         if name == "operation":
-            return thought.operation
+            return thought.raw_operation or thought.operation
         if name == "target":
+            if thought.target_id is not None:
+                return thought.target_id
             if thought.target is None:
                 return options[0]
             for option, line in criteria.items():

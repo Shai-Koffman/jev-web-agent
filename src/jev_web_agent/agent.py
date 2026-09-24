@@ -22,11 +22,11 @@ from jev_web_agent.decide import (
     decide,
 )
 from jev_web_agent.human import Human, Option
-from jev_web_agent.models import Action, ActionRecord, Observation, as_operation
+from jev_web_agent.models import OPERATIONS, Action, ActionRecord, Observation, as_operation
 from jev_web_agent.observe import observe
 from jev_web_agent.report import RunRecord, StepRecord, write_report
 
-GateOutcome = Literal["pass", "done", "block", "ask"]
+GateOutcome = Literal["pass", "done", "block", "ask", "abort"]
 
 
 @dataclass(frozen=True)
@@ -98,6 +98,11 @@ def gate(
     if decision.operation.choice == "done" and passes(decision.operation, th):
         return Verdict("done", "operation 'done' passed the gate", None)
 
+    if decision.operation.choice not in OPERATIONS:
+        return Verdict(
+            "abort", f"Jev returned an unknown operation {decision.operation.choice!r}", None
+        )
+
     action = proposed_action(decision)
     if decision.risky >= th.risky:
         return Verdict("block", f"risky={decision.risky:.2f} >= {th.risky}", action)
@@ -143,7 +148,9 @@ def step_line(number: int, obs: Observation, decision: Decision, verdict: Verdic
             f" │ {escape(line)} (p {decision.target.probability:.2f}, "
             f"conf {decision.target.confidence:.2f})"
         )
-    colour = {"pass": "green", "done": "cyan", "block": "red", "ask": "yellow"}[verdict.outcome]
+    colour = {"pass": "green", "done": "cyan", "block": "red", "ask": "yellow", "abort": "red"}[
+        verdict.outcome
+    ]
     return (
         f"[bold]step {number}[/bold] │ [bold]{escape(op.choice)}[/bold]{target} │ {top} │ "
         f"conf {op.confidence:.2f} │ done {decision.goal_done:.2f} risky {decision.risky:.2f} │ "
@@ -231,6 +238,8 @@ class Agent:
 
         if verdict.outcome == "done":
             return self._finish(record, "done", verdict.reason)
+        if verdict.outcome == "abort":
+            return self._finish(record, "aborted", verdict.reason)
 
         action = verdict.action
         assert action is not None

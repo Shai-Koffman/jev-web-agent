@@ -225,3 +225,25 @@ def test_step_line_prints_page_text_literally_not_as_rich_markup() -> None:
     )
 
     assert 'e1: link "[bold]edit[/bold]"' in out.getvalue()
+
+
+def test_hallucinated_target_id_reobserves_instead_of_acting(tmp_path: Path, site: str) -> None:
+    jev = ScriptedJev([Thought("click", target_id="e99"), Thought("done", goal_done=0.9)])
+
+    record, _, _ = _run(tmp_path, f"{site}/results.html", "open the article", jev)
+
+    assert record.steps[0].result == "e99 is gone; re-observing"
+    assert _executed(record) == []
+    assert record.steps[1].url == f"{site}/results.html"
+    assert record.status == "done"
+
+
+def test_invalid_operation_aborts_cleanly_with_a_reason(tmp_path: Path, site: str) -> None:
+    jev = ScriptedJev([Thought("click", raw_operation="fly")])
+
+    record, _, out = _run(tmp_path, f"{site}/results.html", "open the article", jev)
+
+    assert record.status == "aborted"
+    assert "unknown operation 'fly'" in record.reason
+    assert _executed(record) == []
+    assert "ABORT" in out
