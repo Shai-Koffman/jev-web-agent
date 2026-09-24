@@ -20,6 +20,15 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _no_real_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hermetic by construction: no API keys in the environment, and a cwd with no .env for
+    the CLI's dotenv loading to find. (The live tests read keys at import time instead.)"""
+    for name in ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+
 @pytest.fixture(scope="session")
 def site() -> Iterator[str]:
     """Base URL of a local HTTP server serving tests/fixtures."""
