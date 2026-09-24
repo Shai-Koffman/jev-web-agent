@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx2
 from dotenv import find_dotenv, load_dotenv
 from playwright.sync_api import sync_playwright
 from rich.console import Console
@@ -19,9 +21,13 @@ from typesafe_sdk import TypeSafeClient
 from jev_web_agent.agent import Agent, Thresholds
 from jev_web_agent.decide import MODEL, JevClient, TypeSafeJev
 from jev_web_agent.human import Human, NoAskHuman, TerminalHuman
+from jev_web_agent.openrouter import OPENROUTER_MODEL, OpenRouterJev
 from jev_web_agent.report import RunRecord, new_run_dir
 
 API_KEY_ENV = "TYPESAFE_API_KEY"
+OPENROUTER_KEY_ENV = "OPENROUTER_API_KEY"
+BACKENDS = ("openrouter", "typesafe")
+DEFAULT_MODELS = {"openrouter": OPENROUTER_MODEL, "typesafe": MODEL}
 
 
 @dataclass(frozen=True)
@@ -73,7 +79,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--done-threshold", type=float, default=defaults.done)
     parser.add_argument("--risky-threshold", type=float, default=defaults.risky)
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
-    parser.add_argument("--model", default=MODEL)
+    parser.add_argument(
+        "--backend",
+        choices=BACKENDS,
+        help="where Jev runs (default: openrouter if OPENROUTER_API_KEY is set, else typesafe)",
+    )
+    parser.add_argument(
+        "--model", help=f"default: {OPENROUTER_MODEL} on openrouter, {MODEL} on typesafe"
+    )
     return parser
 
 
@@ -89,29 +102,49 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return args
 
 
+def resolve_backend(requested: str | None) -> str:
+    """An explicit --backend wins; otherwise openrouter when its key is set."""
+    if requested:
+        return requested
+    return "openrouter" if os.environ.get(OPENROUTER_KEY_ENV, "").strip() else "typesafe"
+
+
+def _require(env: str) -> str:
+    key = os.environ.get(env, "").strip()
+    if not key:
+        raise MissingApiKeyError(f"{env} is not set. Put it in .env or the environment.")
+    return key
+
+
 def run(
     argv: Sequence[str] | None = None,
     *,
     jev: JevClient | None = None,
     human: Human | None = None,
     console: Console | None = None,
+    transport: httpx2.BaseTransport | None = None,
 ) -> tuple[RunRecord, Path]:
     """Parse args, open the browser, run the agent, write the report.
 
-    ``jev``/``human`` default to the real TypeSafe client and the terminal; tests inject fakes
-    here and nothing else changes.
+    ``jev``/``human`` default to the real backend client and the terminal; tests inject fakes
+    here and nothing else changes. ``transport`` replaces only the OpenRouter client's HTTP
+    transport (for hermetic tests of the real adapter).
     """
     load_dotenv(find_dotenv(usecwd=True))  # .env where you run it, if present
     args = parse_args(argv)
     console = console or Console()
+    backend = resolve_backend(args.backend)
+    model: str = args.model or DEFAULT_MODELS[backend]
     with contextlib.ExitStack() as stack:
         if jev is None:
-            if not os.environ.get(API_KEY_ENV, "").strip():
-                raise MissingApiKeyError(
-                    f"{API_KEY_ENV} is not set. Put it in .env or the environment."
+            if backend == "openrouter":
+                jev = stack.enter_context(
+                    OpenRouterJev(_require(OPENROUTER_KEY_ENV), model=model, transport=transport)
                 )
-            client = stack.enter_context(TypeSafeClient(model=args.model))
-            jev = TypeSafeJev(client, model=args.model)
+            else:
+                _require(API_KEY_ENV)
+                client = stack.enter_context(TypeSafeClient(model=model))
+                jev = TypeSafeJev(client, model=model)
         if human is None:
             human = NoAskHuman() if args.no_ask else TerminalHuman(console)
 
@@ -122,7 +155,8 @@ def run(
         page = browser.new_context(viewport={"width": 1280, "height": 800}).new_page()
 
         console.print(
-            f"[bold]Goal:[/bold] {escape(args.goal)}\n[bold]Start:[/bold] {escape(args.url)}"
+            f"[bold]Goal:[/bold] {escape(args.goal)}\n[bold]Start:[/bold] {escape(args.url)}\n"
+            f"[bold]Jev:[/bold] {backend} · {escape(model)}"
         )
         agent = Agent(
             page,
@@ -139,9 +173,17 @@ def run(
                 risky=args.risky_threshold,
             ),
             max_steps=args.max_steps,
-            model=args.model,
+            model=model,
         )
         record = agent.run()
+        if isinstance(jev, OpenRouterJev):
+            usage = jev.write_usage(run_dir / "usage.json")
+            total = json.loads(usage.read_text())["total"]
+            console.print(
+                f"openrouter: {total['calls']} calls, {total['latency_seconds'] or 0:.1f}s, "
+                f"{total['input_tokens']} input tokens, {total['output_tokens']} output tokens, "
+                f"cost ${total['cost'] or 0:.6f}"
+            )
     console.print(
         f"[bold]{record.status.upper()}[/bold] {escape(record.reason)}\n"
         f"Report: {(run_dir / 'report.html').resolve()}"
