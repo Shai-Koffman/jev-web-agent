@@ -13,6 +13,7 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 from playwright.sync_api import sync_playwright
 from rich.console import Console
+from rich.markup import escape
 from typesafe_sdk import TypeSafeClient
 
 from jev_web_agent.agent import Agent, Thresholds
@@ -120,7 +121,9 @@ def run(
         stack.callback(browser.close)
         page = browser.new_context(viewport={"width": 1280, "height": 800}).new_page()
 
-        console.print(f"[bold]Goal:[/bold] {args.goal}\n[bold]Start:[/bold] {args.url}")
+        console.print(
+            f"[bold]Goal:[/bold] {escape(args.goal)}\n[bold]Start:[/bold] {escape(args.url)}"
+        )
         agent = Agent(
             page,
             jev,
@@ -140,7 +143,7 @@ def run(
         )
         record = agent.run()
     console.print(
-        f"[bold]{record.status.upper()}[/bold] {record.reason}\n"
+        f"[bold]{record.status.upper()}[/bold] {escape(record.reason)}\n"
         f"Report: {(run_dir / 'report.html').resolve()}"
     )
     return record, run_dir

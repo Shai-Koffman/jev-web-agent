@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
+from jev_web_agent.agent import Thresholds, gate, step_line
 from jev_web_agent.cli import run
+from jev_web_agent.decide import ChoiceResult, Decision
+from jev_web_agent.models import Element, Observation
 from jev_web_agent.report import RunRecord
 from tests.fakes import ScriptedHuman, ScriptedJev, Thought
 
@@ -203,3 +206,22 @@ def test_the_api_key_never_reaches_output(
     for path in run_dir.iterdir():
         if path.suffix in (".html", ".json"):
             assert secret not in path.read_text()
+
+
+def test_step_line_prints_page_text_literally_not_as_rich_markup() -> None:
+    obs = Observation("https://x/", "t", "", (Element("e1", "link", "[bold]edit[/bold]", None),))
+    decision = Decision(
+        ChoiceResult("click", {"click": 0.9, "done": 0.1}, 0.8),
+        ChoiceResult("e1", {"e1": 1.0}, 1.0),
+        None,
+        0.0,
+        0.0,
+        "",
+    )
+    out = io.StringIO()
+
+    Console(file=out, width=300).print(
+        step_line(1, obs, decision, gate(decision, [], obs, Thresholds()))
+    )
+
+    assert 'e1: link "[bold]edit[/bold]"' in out.getvalue()

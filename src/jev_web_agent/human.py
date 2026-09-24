@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Protocol, TextIO
 
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -42,12 +43,14 @@ class TerminalHuman:
         self._stream = stream  # tests feed answers through this
 
     def pick(self, question: str, reason: str, top: Sequence[Option]) -> str | None:
-        table = Table(title=f"Jev's top {len(top)} for [b]{question}[/b] ({reason})")
+        table = Table(title=f"Jev's top {len(top)} for [b]{question}[/b] ({escape(reason)})")
         table.add_column("#", justify="right")
         table.add_column("p", justify="right")
         table.add_column("option")
         for i, (option, probability, meaning) in enumerate(top, start=1):
-            table.add_row(str(i), f"{probability:.2f}", f"{option}  [dim]{meaning}[/dim]")
+            table.add_row(
+                str(i), f"{probability:.2f}", f"{escape(option)}  [dim]{escape(meaning)}[/dim]"
+            )
         self._console.print(table)
         choices = [str(i) for i in range(1, len(top) + 1)] + ["a"]
         answer = Prompt.ask(
@@ -60,7 +63,7 @@ class TerminalHuman:
 
     def resolve_blocked(self, proposal: str) -> bool:
         self._console.print(
-            f"[bold red]Blocked a risky step:[/bold red] {proposal}\n"
+            f"[bold red]Blocked a risky step:[/bold red] {escape(proposal)}\n"
             "The agent will not execute it. You can do it yourself in the browser window."
         )
         answer = Prompt.ask(

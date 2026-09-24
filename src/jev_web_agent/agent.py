@@ -10,6 +10,7 @@ from typing import Literal
 
 from playwright.sync_api import Page
 from rich.console import Console
+from rich.markup import escape
 
 from jev_web_agent.act import act
 from jev_web_agent.decide import (
@@ -130,20 +131,20 @@ def describe(action: Action, obs: Observation) -> str:
 def step_line(number: int, obs: Observation, decision: Decision, verdict: Verdict) -> str:
     """One rich-markup terminal line per step."""
     op = decision.operation
-    top = "  ".join(f"{o} {p:.2f}" for o, p in op.top(3))
+    top = escape("  ".join(f"{o} {p:.2f}" for o, p in op.top(3)))
     target = ""
     if decision.target is not None and op.choice in ("click", "type"):
         element = obs.element(decision.target.choice)
         line = element.line() if element else decision.target.choice
         target = (
-            f" │ {line} (p {decision.target.probability:.2f}, "
+            f" │ {escape(line)} (p {decision.target.probability:.2f}, "
             f"conf {decision.target.confidence:.2f})"
         )
     colour = {"pass": "green", "done": "cyan", "block": "red", "ask": "yellow"}[verdict.outcome]
     return (
-        f"[bold]step {number}[/bold] │ [bold]{op.choice}[/bold]{target} │ {top} │ "
+        f"[bold]step {number}[/bold] │ [bold]{escape(op.choice)}[/bold]{target} │ {top} │ "
         f"conf {op.confidence:.2f} │ done {decision.goal_done:.2f} risky {decision.risky:.2f} │ "
-        f"[{colour}]{verdict.outcome.upper()}[/{colour}] {verdict.reason}"
+        f"[{colour}]{verdict.outcome.upper()}[/{colour}] {escape(verdict.reason)}"
     )
 
 
@@ -195,7 +196,7 @@ class Agent:
         except Exception as exc:  # report whatever happened, then let the caller decide
             record.status = "error"
             record.reason = f"{type(exc).__name__}: {exc}"
-            self.console.print(f"[bold red]error:[/bold red] {record.reason}")
+            self.console.print(f"[bold red]error:[/bold red] {escape(record.reason)}")
         finally:
             write_report(self.run_dir, record)
         return record
@@ -255,7 +256,7 @@ class Agent:
             line = element.line() if element else None
             history.append(ActionRecord(action.operation, line, action.text, obs.url))
         else:
-            self.console.print(f"  [yellow]{result.note}[/yellow]")
+            self.console.print(f"  [yellow]{escape(result.note)}[/yellow]")
         return False
 
     def _finish(self, record: RunRecord, status: str, reason: str) -> bool:
