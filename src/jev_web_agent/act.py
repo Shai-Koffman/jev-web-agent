@@ -37,16 +37,17 @@ def act(page: Page, action: Action) -> ActResult:
     if action.operation in ("click", "type"):
         if action.target_id is None:
             return ActResult(False, f"{action.operation} needs a target")
-        locator = page.locator(f'[data-jev-id="{action.target_id}"]')
-        if locator.count() == 0 or not locator.first.is_visible():
+        locator = page.locator(f'[data-jev-id="{action.target_id}"]').first
+        # is_visible() is False both when the element was removed and when it was hidden.
+        if not locator.is_visible():
             return ActResult(False, f"{action.target_id} is gone; re-observing", gone=True)
         if action.operation == "click":
-            locator.first.click(timeout=ACTION_TIMEOUT_MS)
+            locator.click(timeout=ACTION_TIMEOUT_MS)
             note = f"clicked {action.target_id}"
         else:
             if action.text is None:
                 return ActResult(False, "type needs text")
-            locator.first.fill(action.text, timeout=ACTION_TIMEOUT_MS)
+            locator.fill(action.text, timeout=ACTION_TIMEOUT_MS)
             note = f'typed "{action.text}" into {action.target_id}'
     elif action.operation == "press_enter":
         # Enter usually submits a form; give a navigation a moment to start before settling.
