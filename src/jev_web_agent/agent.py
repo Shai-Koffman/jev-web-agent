@@ -261,7 +261,7 @@ class Agent:
                 return self._finish(record, "done", "the human said the goal is done")
             action = picked
 
-        result = act(self.page, action)
+        result = act(self.page, action, last_operation=history[-1].operation if history else None)
         step.action, step.result = describe(action, obs), result.note
         if result.executed:
             element = obs.element(action.target_id) if action.target_id else None

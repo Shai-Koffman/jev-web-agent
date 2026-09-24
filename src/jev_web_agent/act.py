@@ -14,11 +14,17 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from jev_web_agent.models import Action
+from jev_web_agent.models import Action, Operation
 
 ACTION_TIMEOUT_MS = 10_000
 LOAD_TIMEOUT_MS = 15_000
 NAVIGATION_GRACE_MS = 3_000
+TYPED_ATTR = "data-jev-typed"  # marks the element the last `type` filled
+
+_MARK_TYPED_JS = f"""el => {{
+  document.querySelectorAll('[{TYPED_ATTR}]').forEach(e => e.removeAttribute('{TYPED_ATTR}'));
+  el.setAttribute('{TYPED_ATTR}', '1');
+}}"""
 
 
 @dataclass(frozen=True)
@@ -34,7 +40,9 @@ def _wait_for_page(page: Page) -> None:
         page.wait_for_load_state("load", timeout=LOAD_TIMEOUT_MS)
 
 
-def act(page: Page, action: Action) -> ActResult:
+def act(page: Page, action: Action, *, last_operation: Operation | None = None) -> ActResult:
+    """Execute ``action``. ``last_operation`` is the previous *executed* operation: after a
+    ``type``, ``press_enter`` goes to the element that was typed into, not whatever has focus."""
     if action.operation in ("click", "type"):
         if action.target_id is None:
             return ActResult(False, f"{action.operation} needs a target")
@@ -51,6 +59,7 @@ def act(page: Page, action: Action) -> ActResult:
             else:
                 assert action.text is not None
                 locator.fill(action.text, timeout=ACTION_TIMEOUT_MS)
+                locator.evaluate(_MARK_TYPED_JS)
                 note = f'typed "{action.text}" into {action.target_id}'
         except PlaywrightTimeoutError:
             # e.g. an overlay covers the target: not fatal, the next observation shows why
@@ -66,7 +75,11 @@ def act(page: Page, action: Action) -> ActResult:
             contextlib.suppress(PlaywrightError),
             page.expect_navigation(timeout=NAVIGATION_GRACE_MS),
         ):
-            page.keyboard.press("Enter")
+            typed = page.locator(f"[{TYPED_ATTR}]").first
+            if last_operation == "type" and typed.is_visible():
+                typed.press("Enter", timeout=ACTION_TIMEOUT_MS)
+            else:
+                page.keyboard.press("Enter")
         note = "pressed Enter"
     elif action.operation == "scroll_down":
         page.evaluate("window.scrollBy(0, Math.round(window.innerHeight * 0.8))")

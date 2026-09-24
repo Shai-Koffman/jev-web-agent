@@ -262,3 +262,17 @@ def test_a_click_that_times_out_reobserves_instead_of_erroring(
     assert _executed(record) == []
     assert len(record.steps) == 2  # re-observed
     assert record.status == "done"
+
+
+def test_press_enter_submits_the_box_that_was_typed_into(tmp_path: Path, site: str) -> None:
+    jev = ScriptedJev(
+        [
+            Thought("type", target="Search encyclopedia", text="Alan Turing"),
+            Thought("press_enter"),
+            Thought("done", goal_done=0.9),
+        ]
+    )
+
+    record, _, _ = _run(tmp_path, f"{site}/focus-thief.html", 'search for "Alan Turing"', jev)
+
+    assert record.steps[2].url == f"{site}/results.html?q=Alan+Turing"

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Focus thief</title></head>
+<body>
+  <form action="results.html" method="get">
+    <input type="search" name="q" aria-label="Search encyclopedia">
+    <button type="submit">Search</button>
+  </form>
+  <textarea aria-label="Notes"></textarea>
+  <script>
+    // Like an over-eager widget: typing in the search box moves focus to the notes box.
+    document.querySelector("input[name=q]").addEventListener("input", () =>
+      document.querySelector("textarea").focus());
+  </script>
+</body>
+</html>

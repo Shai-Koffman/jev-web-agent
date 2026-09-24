@@ -94,3 +94,24 @@ def test_click_blocked_by_an_overlay_times_out_without_raising(
     assert not result.executed
     assert "timed out" in result.note
     assert page.title() == "Covered button"
+
+
+def test_press_enter_after_type_goes_to_the_typed_element(page: Page, site: str) -> None:
+    page.goto(f"{site}/search.html")
+    act(page, Action("type", target_id=_id_of(page, "Search encyclopedia"), text="Alan Turing"))
+    page.focus("textarea")  # focus wandered off since the type
+
+    act(page, Action("press_enter"), last_operation="type")
+
+    assert page.url == f"{site}/results.html?q=Alan+Turing"
+
+
+def test_press_enter_otherwise_presses_on_the_page(page: Page, site: str) -> None:
+    page.goto(f"{site}/search.html")
+    act(page, Action("type", target_id=_id_of(page, "Search encyclopedia"), text="Alan Turing"))
+    page.focus("textarea")
+
+    act(page, Action("press_enter"), last_operation="click")
+
+    assert page.url == f"{site}/search.html"
+    assert page.input_value("textarea") == "\n"
