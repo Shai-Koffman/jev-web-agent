@@ -14,9 +14,25 @@ returns typed answers:
 | `Noul` | one number: the probability the statement is true (a Noul has no separate confidence) | "is the goal done?", "is the next step risky?" |
 | `Score` | ordered levels; not used here | |
 
-It is text only, so the page is turned into text first. The endpoint is
-`POST https://api.typesafe.ai/v1/systemone`, called through the `typesafe-sdk` Python client
-(`TypeSafeClient`) with model `jev-latest`. Docs: <https://docs.typesafe.ai/llms.txt>.
+It is text only, so the page is turned into text first. Docs: <https://docs.typesafe.ai/llms.txt>.
+
+### Two backends, same model
+
+| `--backend` | Endpoint | Key | Default model | Client |
+| --- | --- | --- | --- | --- |
+| `openrouter` | `POST https://openrouter.ai/api/alpha/decisions` | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` | `openrouter.py`, a thin httpx2 adapter |
+| `typesafe` | `POST https://api.typesafe.ai/v1/systemone` | `TYPESAFE_API_KEY` | `jev-latest` | the `typesafe-sdk` `TypeSafeClient` |
+
+If you don't pass `--backend`, the agent uses `openrouter` when `OPENROUTER_API_KEY` is set and
+`typesafe` otherwise. OpenRouter's Decisions API takes the same `model` / `state` / `questions`
+request and returns the same `answers`, with two differences:
+
+- `usage` also includes `cost` in USD.
+- A choice answer only guarantees `choice`, so a missing `confidence` or `probabilities` is read
+  as zero certainty, which fails the gate.
+
+On OpenRouter the context limit is 32k tokens. A run on OpenRouter also writes `usage.json`,
+with per-call latency, tokens and cost (call *n* is step *n*).
 
 ## How the loop works
 
@@ -78,10 +94,11 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 ```sh
 uv sync
 uv run playwright install chromium
-cp .env.example .env        # then put your key in .env: TYPESAFE_API_KEY=...
+cp .env.example .env        # then fill in OPENROUTER_API_KEY=... (or TYPESAFE_API_KEY=...)
 ```
 
-`.env` is loaded if present. The key is never printed or written to a report.
+`.env` is loaded from the directory you run in, if it exists. Keys are never printed or written
+to a report.
 
 ## Running
 
@@ -93,8 +110,8 @@ uv run jev-agent --task books    # books.toscrape.com: open "A Light in the Atti
 uv run jev-agent --goal 'Search for "rust borrow checker"' --url https://duckduckgo.com
 ```
 
-The browser runs headed by default so you can watch it. Other useful flags: `--headless`,
-`--no-ask`, `--max-steps N`, `--min-prob`, `--min-conf`, `--done-threshold`,
+The browser runs headed by default so you can watch it. Other useful flags: `--backend`,
+`--headless`, `--no-ask`, `--max-steps N`, `--min-prob`, `--min-conf`, `--done-threshold`,
 `--risky-threshold`, `--runs-dir`, `--model`.
 
 The terminal prints one line per step:
@@ -125,6 +142,8 @@ Every run writes `runs/<YYYY-MM-DD_HH-MM-SS>/`:
     with the chosen option in bold and its confidence, plus both Noul values
   - the exact state text sent to Jev (collapsed)
 - `run.json`: the same data, machine-readable.
+- `usage.json` (OpenRouter runs only): latency, input and output tokens, and cost for each call,
+  plus totals.
 
 To diagnose a bad step, look at the answers. A flat distribution with low confidence means Jev
 couldn't tell the options apart, so check the element lines. A confident wrong answer usually
@@ -140,5 +159,8 @@ Unit tests are hermetic. They use a scripted fake `JevClient` and local HTML fix
 `tests/fixtures/`, served by a small local HTTP server. The loop tests call `cli.run` exactly as
 `jev-agent` does and inject only the fake Jev (and a scripted human where one is asked). The
 real SDK adapter is tested against the real `typesafe-sdk` client with only its HTTP transport
-replaced. `tests/test_live.py` makes one real API call and is skipped unless
-`TYPESAFE_API_KEY` is set.
+replaced: the TypeSafe SDK and `OpenRouterJev` both run for real over a mock transport, and one
+test runs the whole CLI on the OpenRouter backend that way. Every test runs with provider keys
+removed from the environment and a working directory that has no `.env`. `tests/test_live.py`
+has one real call per backend. Each is skipped unless its key is set; if `.env` has
+`OPENROUTER_API_KEY`, the OpenRouter one runs as part of `pytest`.
