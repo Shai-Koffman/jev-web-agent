@@ -55,3 +55,20 @@ class ActionRecord:
             parts.append(f'text="{self.text}"')
         parts.append(f"on {self.url}")
         return " ".join(parts)
+
+
+@dataclass(frozen=True)
+class Action:
+    """A concrete action to execute: Jev's answers after the gate (or a human's picks)."""
+
+    operation: Operation
+    target_id: str | None = None
+    text: str | None = None
+
+
+def as_operation(value: str) -> Operation:
+    """Narrow a string (e.g. a Choice answer) to an Operation, or fail loudly."""
+    for operation in OPERATIONS:
+        if operation == value:
+            return operation
+    raise ValueError(f"unknown operation {value!r}")
