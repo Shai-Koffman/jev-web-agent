@@ -79,13 +79,25 @@ observe ──► decide (1 Jev call) ──► gate ──► act ──┐
    - Every answer the chosen operation depends on (`operation`; plus `target` for click/type;
      plus `text` for type) needs probability ≥ 0.55 and confidence ≥ 0.35. If any answer falls
      short, the terminal shows Jev's **top 3** for that question and you pick one or abort.
-   - The same (operation, target, url) three times in a row → **ask** you.
+     If what you pick differs from Jev's proposal, a second, narrow Jev call asks `risky`
+     about your pick, described in the state as the next step. If that answer is ≥ 0.3, the
+     pick is **blocked** too.
+   - The same (operation, target, text, url) three times in a row → **ask** you.
+   - If Jev returns an operation that isn't in the list, the run **aborts** and the report
+     says why.
    - `--no-ask` aborts wherever it would have asked (for tests and CI). `--max-steps` defaults
      to 15.
 
 4. **Act** (`act.py`). The target is re-queried by `data-jev-id` just before acting. If it has
    disappeared or been hidden, nothing is executed and the loop re-observes. Otherwise
-   Playwright performs the action and waits for the page to load.
+   Playwright performs the action and waits for the page to load. Three cases get special
+   handling:
+   - A click or type that times out (for example, an overlay covers the target) re-observes
+     instead of ending the run.
+   - A click that opens a new tab is followed, and the agent observes the new tab from the
+     next step.
+   - After a `type`, `press_enter` presses Enter on the box that was typed into, not on
+     whatever currently has focus.
 
 ## Setup
 
